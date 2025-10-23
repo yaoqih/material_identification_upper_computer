@@ -1,0 +1,97 @@
+{
+  "serial": {
+    "ports": ["COM3"],
+    "baud": 115200,
+    "data_bits": 8,
+    "parity": "N",
+    "stop_bits": 1,
+    "timeout_ms": 100,
+    "retries": 3
+  },
+  "grouping": {
+    "mode": "triplet",
+    "watch_dir": "data/watch",
+    "work_dir": "data/work",
+    "error_dir": "data/error",
+    "done_dir": "data/done",
+    "n_to_color": { "N1": "R", "N2": "G", "N3": "B" },
+    "color_order": ["R", "G", "B"],
+    "name_tag_regex": "^(?P<a>[^-]+)(?:-(?P<b>[^-]+))?-(?P<tag>N[0-9]+)$"
+  },
+  "ingress": {
+    "ready_quiet_ms": 100,
+    "atomic_pair_enabled": true,
+    "allowed_extensions": [".txt", ".jpg", ".jpeg"],
+    "atomic_pair_suffixes": {
+      "part_suffix": ".part",
+      "lock_suffix": ".pairlock"
+    }
+  },
+  "mapping": {
+    "rows": 0,
+    "cols": 5,
+    "snake": false,
+    "serpentine_enabled": false,
+    "leds_per_slot": 3,
+    "offset": 0,
+    "start_corner": "TL",
+    "cabinets": []
+  },
+  "printing": { "device": "", "paper": { "width_mm": 80, "height_mm": 100 }, "enabled": false, "columns": 2, "rows": 30, "triple": true, "column_separator": " | " },
+  "display": { "blink_enabled": true, "blink_threshold_percent": 10 },
+  "thresholds": { "percent_blink": 0.10 },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/app.log",
+    "format": "%(asctime)s %(levelname)s %(name)s - %(message)s",
+    "rotate": { "enabled": true, "max_bytes": 1048576, "backup_count": 3 },
+    "hex": { "capture": false, "incoming": true, "outgoing": true, "max_bytes": 1024 },
+    "device_info_file": "logs/device-info.log",
+    "device_info_format": "%(asctime)s %(message)s"
+  },
+  "comm": {
+    "enable_heartbeat": true,
+    "heartbeat_interval_seconds": 10,
+    "offline_failure_threshold": 10,
+    "bytes_per_frame": 512,
+    "ack_timeout_ms": 1000,
+    "cmd_timeout_ms": 2000,
+    "inter_frame_gap_ms": 10,
+    "retry": { "enabled": true, "ack_timeout_ms": 300, "max_attempts": 3, "backoff_ms": 50 }
+  },
+  "parsing": {
+    "deduplicate_indices": true,
+    "allowed_code_prefix": ["SP"],
+    "row_pattern": "^\\s*(?:\\d+)\\s+([A-Za-z]+)(\\d+)\\s+([\\d]+(?:\\.\\d+)?)\\s*%\\s*$",
+    "alt_row_pattern": "^\\s*([A-Za-z]+)(\\d+)\\s+([\\d]+(?:\\.\\d+)?)\\s*%\\s*$",
+    "header_keywords": ["编号", "名称", "百分"]
+  },
+  "sp_mapping": {
+    "block_size": 100,
+    "leds_per_slot": 3,
+    "start_corner": "TL",
+    "row_direction_even": "LR",
+    "row_direction_odd": "RL",
+    "groups": [
+      {"id":1,"start_sp":1,"end_sp":70,"cols_per_row":5},
+      {"id":2,"start_sp":71,"end_sp":151,"cols_per_row":5},
+      {"id":3,"start_sp":152,"end_sp":210,"cols_per_row":5},
+      {"id":4,"start_sp":211,"end_sp":280,"cols_per_row":5},
+      {"id":5,"start_sp":281,"end_sp":350,"cols_per_row":5},
+      {"id":6,"start_sp":351,"end_sp":420,"cols_per_row":5},
+      {"id":7,"start_sp":421,"end_sp":490,"cols_per_row":5},
+      {"id":8,"start_sp":491,"end_sp":610,"cols_per_row":5},
+      {"id":9,"start_sp":611,"end_sp":670,"cols_per_row":5},
+      {"id":10,"start_sp":671,"end_sp":730,"cols_per_row":5},
+      {"id":11,"start_sp":731,"end_sp":790,"cols_per_row":5},
+      {"id":12,"start_sp":791,"end_sp":850,"cols_per_row":5},
+      {"id":13,"start_sp":851,"end_sp":910,"cols_per_row":5},
+      {"id":14,"start_sp":911,"end_sp":950,"cols_per_row":4},
+      {"id":15,"start_sp":1001,"end_sp":1034,"cols_per_row":3},
+      {"id":16,"start_sp":1051,"end_sp":1099,"cols_per_row":6}
+    ]
+  },
+  "dispatcher": {
+    "color_order": ["R", "G", "B"]
+  }
+}

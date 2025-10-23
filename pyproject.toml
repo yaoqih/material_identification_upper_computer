@@ -1,0 +1,16 @@
+[project]
+name = "material-identification-upper-computer"
+version = "0.1.0"
+description = "上位机：串口控制 WS2812 灯带，文件驱动流水（入库/分组/映射/派发）"
+readme = "README.md"
+license = { text = "Proprietary" }
+requires-python = ">=3.10"
+dependencies = [
+    "pyserial>=3.5",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pyinstaller>=6.0.0",
+]
