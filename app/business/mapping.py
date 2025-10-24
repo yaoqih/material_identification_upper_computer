@@ -65,7 +65,7 @@ class MappingService:
                 m = row_re.match(line) if row_re else None
                 if not m:
                     # 首行表头关键词跳过（大小写不敏感）
-                    if lineno == 1 and any(kw.lower() in line.lower() for kw in self._header_keywords):
+                    if lineno == 1:
                         continue
                     if alt_re:
                         m = alt_re.match(line)

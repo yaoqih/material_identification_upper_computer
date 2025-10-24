@@ -339,9 +339,9 @@ class SerialSession:
 
     def _send_a1_payload(self, indices: List[int], attrs: Optional[List[int]] = None, colors: Optional[List[int]] = None) -> None:
         """
-        发送 A1（2B/项位域）：
+        发送 A1（2B/项位域，多项合帧）：
         - 每项 2 字节：bit15=闪烁；bit14..13=颜色(00红/01绿/10蓝/11预留)；bit12..0=ID(13位)
-        - attrs bit0→闪烁；colors 0/1/2 对应 R/G/B；分片时 attrs/colors 与 indices 对齐
+        - 每帧按 bytes_per_frame 聚合多个项；attrs bit0→闪烁；colors 0/1/2 对应 R/G/B；分片时 attrs/colors 与 indices 对齐
         - 空清单：仍发送一帧 A1 并等待 BF（保持统一时序）
         """
         per_item_bytes = 2

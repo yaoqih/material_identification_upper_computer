@@ -99,15 +99,14 @@ class PySerialPort(SerialPortBase):
         ser = self._ser
         if ser is None:
             return
-        cb = self._rx_cb
         while not self._rx_stop.is_set():
             try:
                 waiting = int(getattr(ser, "in_waiting", 0))
                 if waiting > 0:
                     data = ser.read(waiting)
-                    if data and cb:
+                    if data and  self._rx_cb:
                         try:
-                            cb(data)
+                             self._rx_cb(data)
                         except Exception as e:
                             self._logger.error(f"RX callback error: {e}")
                 else:

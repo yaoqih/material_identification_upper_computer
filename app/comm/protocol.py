@@ -70,9 +70,8 @@ def decode_stream(
     """就地解析：从流缓冲区提取尽可能多的完整帧，余量保留在 buf 中。
     错误处理（当提供 on_error 时）参见文档。
     on_garbage：遇到非协议前缀字节（噪声/设备信息）时，将其切片回调给上层。
-    A1 的 VAL 语义：
-      - 主要格式：2B/项位域（bit15=闪烁；bit14..13=颜色：00红/01绿/10蓝/11预留；bit12..0=ID(13位)）
-      - 兼容旧格式：3B/项（index(uint16 LE)+flags(uint8)，flags 的 bit0 表示闪烁）
+    A1 的 VAL 语义仅允许 2B/项位域：
+      - 位域：bit15=闪烁；bit14..13=颜色：00红/01绿/10蓝/11预留；bit12..0=ID(13位)
     其他长度触发 VAL_ERROR。
     """
     frames: List[ProtocolFrame] = []
@@ -148,8 +147,8 @@ def decode_stream(
                     else:
                         frames.append(ProtocolFrame(ft, seq, val))
                 elif ft == FrameType.A1:
-                    # 允许 2 字节/项（纯 index）或 3 字节/项（index+flags）
-                    if not ((val_len % 2) == 0 or (val_len % 3) == 0):
+                    # 仅允许 2 字节/项位域
+                    if (val_len % 2) != 0:
                         if on_error is not None:
                             try:
                                 on_error(AckCode.VAL_ERROR, seq)
@@ -187,10 +186,9 @@ def build_a1(
     colors: Optional[List[int]] = None,
 ) -> ProtocolFrame:
     """
-    构造 A1 指令帧（统一 2 字节/项位域）：
+    构造 A1 指令帧（2 字节/项位域）：
     - 位域：bit15=闪烁；bit14..13=颜色(00红/01绿/10蓝/11预留)；bit12..0=ID(13位)
     - attrs 提供时，bit0 映射到位域的 bit15；colors 提供时，按 0=红、1=绿、2=蓝、3=预留；未提供则默认 0(红)
-    - 保留解析层对 3B/项（index+flags）的兼容，但构造器始终输出 2B/项
     """
     m = len(indices)
     items: List[bytes] = []

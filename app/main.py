@@ -70,7 +70,6 @@ def main() -> int:
                 logger.error(f"Unexpected error when opening serial: {e}")
                 time.sleep(10.0)
         return None
-    dispatcher.request_next_payload()
     port = _open_port_with_retry()
     if port is None:
         logger.info("Shutdown requested before serial opened.")
