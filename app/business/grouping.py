@@ -74,7 +74,7 @@ class GroupingService:
                 try:
                     ordered[c] = (txts[stem], jpgs[stem])
                     try:
-                        logger.info(f"assign via=simple stem={stem} color={c}")
+                        logger.debug(f"assign via=simple stem={stem} color={c}")
                     except Exception:
                         pass
                 except KeyError:

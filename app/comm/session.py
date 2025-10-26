@@ -3,6 +3,7 @@ import time
 import threading
 from enum import Enum
 from typing import Callable, Optional, Tuple, List, Dict, Set, Union
+from queue import Queue, Empty
 
 from app.comm.protocol import (
     FrameType,
@@ -126,6 +127,14 @@ class SerialSession:
         # 可选派发结果钩子（成功派发后归档用）
         self.on_a1_result: Optional[Callable[[bool], None]] = None
 
+        # 发送工作线程：统一出站路径（AF/A0/A1 等），避免在串口接收回调线程内执行业务与阻塞等待ACK
+        # 高优先级队列用于 AF 等“即时应答”帧，普通队列用于 A1 分片与心跳等
+        self._tx_queue_high: "Queue[Callable[[], None]]" = Queue()
+        self._tx_queue: "Queue[Callable[[], None]]" = Queue()
+        self._tx_stop = threading.Event()
+        self._tx_thread: Optional[threading.Thread] = None
+        self._start_tx_worker()
+
     def _set_state(self, new_state: "SessionState") -> None:
         if new_state != self.state:
             self.logger.info(f"Session state {self.state.value} -> {new_state.value}")
@@ -152,13 +161,13 @@ class SerialSession:
             tname = f"0x{int(frame.type):02X}"
         self.logger.debug(f"TX {tname} seq={frame.seq} len={len(frame.val)}")
 
-    def send_and_wait_ack(self, frame: ProtocolFrame, timeout_ms: Optional[int] = None) -> bool:
+    def send_and_wait_ack(self, frame: ProtocolFrame, timeout_ms: Optional[int] = None, single_try: bool = False) -> bool:
         """
         实现 ACK 等待重试（由 comm.retry.* 配置驱动）：
         - 参考 [docs/通信约定.md](docs/通信约定.md:64) 的在线判定：收到任何ACK视为在线，失败计数清零；
         - 重试策略为项目约定：可配置 enabled/ack_timeout_ms/max_attempts/backoff_ms。
         - 超时优先级：调用方参数 > 会话属性(self.ack_timeout_ms)。配置对 ack_timeout_ms 的影响在 __init__ 已处理，避免破坏既有语义。
-        - 心跳调度线程中按单次尝试执行，不引入重试，保持心跳节奏与离线判定的一致性；显式调用 send_heartbeat() 仍按重试策略执行。
+        - 心跳：周期性心跳按单次尝试执行；通过参数 single_try=True 或在心跳线程内调用达到同样效果。显式调用 send_heartbeat() 可使用重试。
         """
         use_retry = getattr(self, "retry_enabled", True)
         attempts = max(1, int(getattr(self, "retry_max_attempts", 3))) if use_retry else 1
@@ -166,9 +175,9 @@ class SerialSession:
         # 单次尝试的等待时长
         per_try_timeout = int(timeout_ms if timeout_ms is not None else getattr(self, "ack_timeout_ms", 1000))
 
-        # 心跳线程内关闭重试（仅用于周期性心跳；不影响显式调用 send_heartbeat() 的重试用例）
+        # 心跳单次尝试：在心跳线程内或显式指定 single_try=True 时生效
         try:
-            if frame.type == FrameType.A0 and self._hb_thread is not None and threading.current_thread() == self._hb_thread:
+            if frame.type == FrameType.A0 and (single_try or (self._hb_thread is not None and threading.current_thread() == self._hb_thread)):
                 attempts = 1
                 backoff_ms = 0
         except Exception:
@@ -220,7 +229,8 @@ class SerialSession:
             # 若一次发送耗时超过周期，则不额外等待，避免“耗时+周期”叠加导致节奏过慢。
             next_time = time.monotonic()
             while not self._hb_stop.is_set():
-                self.send_heartbeat()
+                # 通过 TX 队列串行化发送 A0，避免占用接收线程
+                self._enqueue_heartbeat()
                 next_time += itv
                 now = time.monotonic()
                 delay = next_time - now
@@ -242,6 +252,86 @@ class SerialSession:
             # 不阻断等待，避免影响串口线程
             self._hb_thread = None
 
+    def _start_tx_worker(self) -> None:
+        if self._tx_thread and self._tx_thread.is_alive():
+            return
+        self._tx_stop.clear()
+
+        def _tx_runner() -> None:
+            while not self._tx_stop.is_set():
+                job = None
+                high = False
+                try:
+                    # 优先执行高优先级任务（AF 等）
+                    job = self._tx_queue_high.get_nowait()
+                    high = True
+                except Empty:
+                    try:
+                        job = self._tx_queue.get(timeout=0.1)
+                        high = False
+                    except Empty:
+                        continue
+                try:
+                    job()
+                except Exception as e:
+                    self.logger.debug(f"tx worker job error: {e}")
+                finally:
+                    try:
+                        if job is not None:
+                            if high:
+                                self._tx_queue_high.task_done()
+                            else:
+                                self._tx_queue.task_done()
+                    except Exception:
+                        pass
+
+        self._tx_thread = threading.Thread(target=_tx_runner, name=f"{self.logger.name}-tx", daemon=True)
+        self._tx_thread.start()
+        self.logger.info("TX worker started")
+
+    def _stop_tx_worker(self, drain: bool = False, timeout_sec: float = 1.0) -> None:
+        self._tx_stop.set()
+        self.logger.info("TX worker stopping")
+        # 可选等待队列清空（尽力而为）
+        if drain:
+            end = time.monotonic() + float(timeout_sec)
+            while (not self._tx_queue_high.empty() or not self._tx_queue.empty()) and time.monotonic() < end:
+                time.sleep(0.01)
+        try:
+            if self._tx_thread and self._tx_thread.is_alive():
+                self._tx_thread.join(timeout=0.2)
+        except Exception:
+            pass
+        self._tx_thread = None
+
+    def _enqueue_heartbeat(self) -> None:
+        """将一次 A0 心跳发送作为 TX 任务入队（单次尝试，不重试）"""
+        def _job() -> None:
+            try:
+                f = build_a0()
+                # 通过 single_try=True 保持“心跳不重试”的既有语义
+                self.send_and_wait_ack(f, timeout_ms=None, single_try=True)
+            except Exception as e:
+                self.logger.debug(f"heartbeat tx job error: {e}")
+        try:
+            self._tx_queue.put(_job, block=False)
+            self.logger.debug("enqueued heartbeat A0 job")
+        except Exception as e:
+            self.logger.debug(f"enqueue heartbeat job failed: {e}")
+
+    def _enqueue_af(self, seq: int, code: Union[int, AckCode]) -> None:
+        """将 AF 发送作为高优先级 TX 任务入队（不等待 ACK）"""
+        def _job() -> None:
+            try:
+                self._send_frame(build_af(seq=seq, code=code))
+            except Exception as e:
+                self.logger.debug(f"AF tx job error: {e}")
+        try:
+            self._tx_queue_high.put(_job, block=False)
+            self.logger.debug(f"enqueued AF code=0x{int(code):02X} seq={seq}")
+        except Exception as e:
+            self.logger.debug(f"enqueue AF job failed: {e}")
+
     def _on_bytes(self, data: bytes) -> None:
         self._rx_buf.extend(data)
         # HEX 捕获（接收）
@@ -256,7 +346,7 @@ class SerialSession:
         def _on_err(code: AckCode, seq: int) -> None:
             try:
                 self.logger.debug(f"decode error -> AF code=0x{int(code):02X} seq={seq}")
-                self._send_frame(build_af(seq=seq, code=code))
+                self._enqueue_af(seq=seq, code=code)
             except Exception as e:
                 self.logger.debug(f"send AF on decode error failed: {e}")
 
@@ -292,47 +382,57 @@ class SerialSession:
             return
 
         if fr.type == FrameType.B0:
-            # 设备心跳，回 AF
-            self._send_frame(build_af(seq=fr.seq, code=AckCode.OK))
+            # 设备心跳，回 AF（经 TX 高优先队列）
+            self._enqueue_af(seq=fr.seq, code=AckCode.OK)
             self._offline_failures = 0
             if self.state != SessionState.CONNECTED:
                 self._set_state(SessionState.CONNECTED)
             return
 
         if fr.type == FrameType.B1:
-            # 重复B1（同seq）幂等：仅重发AF，避免重复下发A1
+            # 重复B1（同seq）幂等：仅重发AF（高优先队列），避免重复下发A1
             if self._last_b1_seq is not None and fr.seq == self._last_b1_seq:
                 if getattr(self, "_duplicate_ack_mode", "duplicate_code") == "echo_last":
-                    self._send_frame(build_af(seq=fr.seq, code=self._last_b1_ack_code))
+                    self._enqueue_af(seq=fr.seq, code=self._last_b1_ack_code)
                     self.logger.debug(f"dup B1 seq={fr.seq} echo_last code=0x{int(self._last_b1_ack_code):02X}")
                 else:
-                    self._send_frame(build_af(seq=fr.seq, code=AckCode.DUPLICATE))
+                    self._enqueue_af(seq=fr.seq, code=AckCode.DUPLICATE)
                     self.logger.debug(f"dup B1 seq={fr.seq} code=DUPLICATE(0x{int(AckCode.DUPLICATE):02X})")
                 return
 
-            # 乱序检测：非预期下一值 → 按大小关系返回
+            # 乱序检测：非预期下一值 → 按大小关系返回（AF 走高优先队列）
             if self._last_b1_seq is not None:
                 expected = (self._last_b1_seq + 1) & 0xFFFF
                 if fr.seq != expected:
                     code = AckCode.SEQ_TOO_SMALL if fr.seq < expected else AckCode.SEQ_TOO_LARGE
-                    self._send_frame(build_af(seq=fr.seq, code=code))
+                    self._enqueue_af(seq=fr.seq, code=code)
                     self._last_b1_ack_code = int(code)
                     self.logger.debug(f"ooB1 seq={fr.seq} expected={expected} code=0x{int(code):02X}")
                     return
 
-            # 正常顺序：更新并执行业务
+            # 正常顺序：更新并执行业务（将重活丢给 TX 工作者线程，避免占用接收线程）
             self._last_b1_seq = fr.seq
             self.expected_remote_seq = (fr.seq + 1) & 0xFFFF
-            self._send_frame(build_af(seq=fr.seq, code=AckCode.OK))
+            self._enqueue_af(seq=fr.seq, code=AckCode.OK)
             self._last_b1_ack_code = int(AckCode.OK)
-            # 若上层提供 attrs，按配置决定是否承载；否则保持纯 index 模式
-            result = self._request_handler()
-            colors: Optional[List[int]] = None
-            if isinstance(result, tuple) and len(result) == 3:
-                indices, attrs, colors = result
-            else:
-                indices, attrs = result  # type: ignore
-            self._send_a1_payload(indices, attrs=attrs, colors=colors)
+
+            def _job() -> None:
+                try:
+                    result = self._request_handler()
+                    colors: Optional[List[int]] = None
+                    if isinstance(result, tuple) and len(result) == 3:
+                        indices, attrs, colors = result
+                    else:
+                        indices, attrs = result  # type: ignore
+                    self._send_a1_payload(indices, attrs=attrs, colors=colors)
+                except Exception as e:
+                    self.logger.debug(f"tx job error: {e}")
+
+            try:
+                self._tx_queue.put(_job, block=False)
+                self.logger.debug(f"enqueued A1 payload job for B1 seq={fr.seq}")
+            except Exception as e:
+                self.logger.debug(f"enqueue A1 job failed: {e}")
             return
 
         # 其他 TYPE 最小实现暂不处理
@@ -360,6 +460,33 @@ class SerialSession:
                     self.on_a1_result(all_ok)
                 except Exception as e:
                     self.logger.debug(f"on_a1_result callback error: {e}")
+    
+        def close(self, drain_tx: bool = False, close_port: bool = False) -> None:
+            """关闭会话：停止心跳与 TX 工作者，可选清空队列并关闭底层串口。"""
+            try:
+                self.stop_heartbeat()
+            except Exception:
+                pass
+            try:
+                self._stop_tx_worker(drain=drain_tx)
+            except Exception:
+                pass
+            if close_port:
+                try:
+                    if hasattr(self.port, "close"):
+                        self.port.close()  # type: ignore[attr-defined]
+                except Exception as e:
+                    self.logger.debug(f"port close failed: {e}")
+    
+        def __del__(self) -> None:
+            try:
+                self._stop_tx_worker(drain=False)
+            except Exception:
+                pass
+            try:
+                self.stop_heartbeat()
+            except Exception:
+                pass
             return
     
         i = 0
