@@ -55,9 +55,9 @@ class Dispatcher:
             try:
                 fis._safe_move(txt, dst)
                 fis._safe_move(jpg, dst)
-                self.logger.info(f"archive {group.key} color={color} -> {dst}")
+                self.logger.info(f"archive {txt} color={color} -> {dst}")
             except Exception as e:
-                self.logger.error(f"archive failed {group.key} color={color}: {e}")
+                self.logger.error(f"archive failed {txt} color={color}: {e}")
 
     def archive_pending(self, success: bool = True) -> None:
         g = self._last_dispatched

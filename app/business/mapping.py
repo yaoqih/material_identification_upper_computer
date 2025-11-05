@@ -138,10 +138,10 @@ class MappingService:
 
         if dir_str == "LR":
             pos_val = r * cols + c + 1
-            reverse = False
+            reverse = True
         else:
             pos_val = r * cols + (cols - 1 - c) + 1
-            reverse = True
+            reverse = False
         return pos_val, reverse
 
     def compute_led_ids_for_sp(self, sp: int, group: dict) -> Tuple[int, int, int]:
