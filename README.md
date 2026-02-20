@@ -2,7 +2,7 @@
 中文上位机，面向画布配色与拣料，通过串口控制 WS2812 灯带，高亮提示仓格，降低差错并提升效率。
 
 ## 核心价值
-- 文件驱动的稳健流水：安静窗口过滤半写，预检先于移动（文件名正则 + 文本解析），失败整对入 error；成功采用 .part + .pairlock 两阶段提交，最终原子落盘至 work。[ingest_batch()](app/business/file_ingress.py:41)、[_safe_move()](app/business/file_ingress.py:210)
+- 文件驱动的稳健流水：安静窗口过滤半写，预检先于移动（文件名正则 + 文本解析）；失败整对入 error；未成对先留在 watch 等待配对；成功采用 .part + .pairlock 两阶段提交，最终原子落盘至 work。[ingest_batch()](app/business/file_ingress.py:41)、[_safe_move()](app/business/file_ingress.py:210)
 - 自动分组三色与映射：按文件名 N1/N2/N3 聚合为 R/G/B；支持蛇形映射；闪烁由 A1 每项 2B 的最高位(MSB)承载。[GroupingService.group()](app/business/grouping.py:25)、[serpentine_map()](app/business/mapping.py:35)、[compose_indices_with_msb_for_file()](app/business/mapping.py:140)
 - 串口协议一致性：固定帧格式与校验，A0/A1/AF、B0/B1/BF 完整实现。[FrameType](app/comm/protocol.py:16)、[AckCode](app/comm/protocol.py:24)、[encode_frame()](app/comm/protocol.py:49)、[decode_stream()](app/comm/protocol.py:62)
 - 会话可靠性：B1 幂等与乱序处理、A1 分片、ACK 等待重试、心跳在线判定。[SerialSession](app/comm/session.py:28)、[_handle_frame()](app/comm/session.py:250)、[_send_a1_payload()](app/comm/session.py:296)、[send_and_wait_ack()](app/comm/session.py:139)、[start_heartbeat()](app/comm/session.py:194)
@@ -19,7 +19,7 @@
 ```mermaid
 graph TD
     W[watch] -->|quiet ready| WK[work]
-    W -->|invalid or incomplete| ER[error]
+    W -->|invalid| ER[error]
     WK --> G[grouping RGB] --> M[mapping merge] --> D[dispatcher queue] --> S[session send] --> DN[done]
     D -->|failure| ER2[error]
 ```
@@ -77,7 +77,7 @@ sequenceDiagram
   - 日志与 HEX：logging.level/rotate/* 与 logging.hex.capture，日志模块 [get_logger()](app/logs/logger.py:24)
 
 ## 数据流水线（watch→work/error→done）
-- 入库：先按安静窗口筛选，然后执行合法性预检（文件名正则 + 文本解析至少 1 个有效 index）；失败整对入 error；成功通过 .part + .pairlock 两阶段提交落盘至 work。[ingest_batch()](app/business/file_ingress.py:41)
+- 入库：先按安静窗口筛选，然后执行合法性预检（文件名正则 + 文本解析至少 1 个有效 index）；失败整对入 error；未成对先留在 watch 等待后续配对；成功通过 .part + .pairlock 两阶段提交落盘至 work。[ingest_batch()](app/business/file_ingress.py:41)
 - 分组：按文件名末尾 -N1/N2/N3 聚合为 R/G/B 三色组。[GroupingService.group()](app/business/grouping.py:25)
 - 映射：解析各色文本行的 index 和可选 percent，按 R→G→B 合并；蛇形重排；当 percent 超阈值置 MSB。[parse_indices_and_percent_from_txt()](app/business/mapping.py:76)、[compose_indices_with_msb_for_file()](app/business/mapping.py:194)
 - 派发：设备 B1 请求后，上位机 AF(OK) → A1（可能分片）→ 每片等待 BF；成功后归档至 done，失败分流 error。[Dispatcher.request_next_payload()](app/business/dispatcher.py:35)、[_send_a1_payload()](app/comm/session.py:296)
@@ -103,9 +103,10 @@ sequenceDiagram
 - 无硬件联调：使用内存串口 [FakeSerialPort](app/comm/serial_port.py:26) 与会话 [SerialSession](app/comm/session.py:28) 模拟端到端流程
 
 ## 打包与分发
-- Windows 一键脚本：运行 [scripts/build.bat](scripts/build.bat)
-- 通用命令（示例）：`pyinstaller --noconfirm --clean --name MaterialUpper --onedir --console --paths . --add-data "configs;configs" --add-data "resources;resources" app/main.py`
-- 产物：dist/MaterialUpper；包含配置与资源目录（按脚本参数）
+- 推荐：使用 GitHub Actions 工作流打 Windows 包，见 [.github/workflows/windows-package.yml](.github/workflows/windows-package.yml)
+- 触发方式：在 GitHub 仓库 Actions 页面手动运行 `Windows Package`，或推送 `v*` 标签自动触发
+- 下载产物：在该次运行的 Artifacts 中下载 `MaterialUpper-windows`（包含 `dist/MaterialUpper-windows.zip`）
+- 本地备用：运行 [scripts/build.bat](scripts/build.bat)
 
 ## 常见问题与排障
 - 半写文件：提高 [ingress.ready_quiet_ms](configs/default.json)；规范仅在 watch 为空时投放

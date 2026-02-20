@@ -1,6 +1,6 @@
 {
   "serial": {
-    "ports": ["COM3"],
+    "ports": ["COM7"],
     "baud": 115200,
     "data_bits": 8,
     "parity": "N",
@@ -74,8 +74,8 @@
     "row_direction_odd": "RL",
     "groups": [
       {"id":1,"start_sp":1,"end_sp":70,"cols_per_row":5},
-      {"id":2,"start_sp":71,"end_sp":151,"cols_per_row":5},
-      {"id":3,"start_sp":152,"end_sp":210,"cols_per_row":5},
+      {"id":2,"start_sp":71,"end_sp":140,"cols_per_row":5},
+      {"id":3,"start_sp":141,"end_sp":210,"cols_per_row":5},
       {"id":4,"start_sp":211,"end_sp":280,"cols_per_row":5},
       {"id":5,"start_sp":281,"end_sp":350,"cols_per_row":5},
       {"id":6,"start_sp":351,"end_sp":420,"cols_per_row":5},

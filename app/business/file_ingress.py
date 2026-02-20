@@ -256,16 +256,32 @@ class FileIngressService:
                     except Exception:
                         pass
 
-        # 其余“就绪但不成对/不支持扩展名”的文件 -> error
+        # 其余文件处理：
+        # - 非目标扩展名（且已就绪）直接移入 error；
+        # - 目标扩展名但暂未凑成 txt+jpg/jpeg 的，保留在 watch 等待下一轮，避免“先到先错判”。
         for f in ready_files:
             if f.stem in processed_stems:
                 continue
             ext = f.suffix.lower()
-            if (ext not in allowed_exts) or (f.stem not in by_stem) or (".txt" not in by_stem[f.stem]) or ((".jpg" not in by_stem[f.stem] and ".jpeg" not in by_stem[f.stem])):
+            if ext not in allowed_exts:
                 try:
                     moved_err.append(self._safe_move(f, er))
                 except Exception:
                     pass
+                continue
+
+            parts = by_stem.get(f.stem, {})
+            has_txt = ".txt" in parts
+            has_img = (".jpg" in parts) or (".jpeg" in parts)
+            if not (has_txt and has_img):
+                # 暂未成对，等待后续批次。
+                continue
+
+            # 理论上成对文件应在上方已处理到 work 或 error；兜底防止异常残留。
+            try:
+                moved_err.append(self._safe_move(f, er))
+            except Exception:
+                pass
 
         return moved_work, moved_err
 
