@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, Dict
 import json
 import os
+import sys
 
 class ConfigRepo:
     def __init__(self, default_path: str | Path = "configs/default.json") -> None:
@@ -10,10 +11,42 @@ class ConfigRepo:
         env_path = os.environ.get("APP_CONFIG_PATH")
         self.default_path = Path(env_path) if env_path else Path(default_path)
 
+    def _resolve_default_path(self, p: Path) -> Path:
+        """
+        默认配置路径解析：
+        - 冻结运行时优先可执行文件同级目录（支持 dist/MaterialUpper/configs/default.json）；
+        - 其次当前工作目录；
+        - 开发环境下再回退到仓库根目录。
+        """
+        if p.is_absolute():
+            return p
+
+        if getattr(sys, "frozen", False):
+            exe_cfg = Path(sys.executable).resolve().parent / p
+            if exe_cfg.exists():
+                return exe_cfg
+
+        cwd_cfg = Path.cwd() / p
+        if cwd_cfg.exists():
+            return cwd_cfg
+
+        repo_cfg = Path(__file__).resolve().parents[2] / p
+        if repo_cfg.exists():
+            return repo_cfg
+
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).resolve().parent / p
+        return cwd_cfg
+
     def load(self, path: str | Path | None = None) -> Dict[str, Any]:
         # 动态读取环境变量（允许测试在运行中注入配置路径）
         env_path_now = os.environ.get("APP_CONFIG_PATH")
-        p = Path(path) if path else (Path(env_path_now) if env_path_now else self.default_path)
+        if path is not None:
+            p = Path(path)
+        elif env_path_now:
+            p = Path(env_path_now)
+        else:
+            p = self._resolve_default_path(self.default_path)
         with p.open("r", encoding="utf-8") as f:
             cfg: Dict[str, Any] = json.load(f)
         self._apply_defaults(cfg)
