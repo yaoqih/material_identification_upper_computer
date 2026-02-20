@@ -6,7 +6,8 @@ __pycache__/
 build/
 dist/
 *.spec
-logs/
+/logs/
 .vscode/
 .venv/
 .env
+artifacts/
