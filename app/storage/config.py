@@ -62,10 +62,8 @@ class ConfigRepo:
         # 兼容门控与负载参数
         comm.setdefault("duplicate_ack_mode", "duplicate_code")  # 可选：echo_last
         # 运行时可调参数（与现有代码行为对齐）
-        comm.setdefault("bytes_per_frame", 512)
         comm.setdefault("ack_timeout_ms", 1000)
         comm.setdefault("cmd_timeout_ms", 2000)
-        comm.setdefault("inter_frame_gap_ms", 10)
 
         # comm.retry 默认（重试策略为项目约定配置驱动）
         retry = comm.setdefault("retry", {})

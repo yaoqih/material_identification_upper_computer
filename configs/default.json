@@ -53,10 +53,8 @@
     "enable_heartbeat": true,
     "heartbeat_interval_seconds": 10,
     "offline_failure_threshold": 10,
-    "bytes_per_frame": 512,
     "ack_timeout_ms": 1000,
     "cmd_timeout_ms": 2000,
-    "inter_frame_gap_ms": 10,
     "retry": { "enabled": true, "ack_timeout_ms": 300, "max_attempts": 3, "backoff_ms": 50 }
   },
   "parsing": {

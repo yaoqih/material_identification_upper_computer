@@ -29,7 +29,7 @@ class SessionState(Enum):
 class SerialSession:
     """
     最小会话实现（基线：单串口、A1仅index、无任务空清单）：
-    - B1 请求：AF(00) → request_handler() → A1（分包） → 等待BF
+    - B1 请求：AF(00) → request_handler() → A1（单帧） → 等待BF
     - B0 心跳：回 AF(00)
     - A0 心跳发送：send_heartbeat()
     - 重复B1（同SEQ）：仅重发AF，避免重复下发A1
@@ -41,8 +41,6 @@ class SerialSession:
         name: str = "session",
         ack_timeout_ms: int = 1000,
         cmd_timeout_ms: int = 2000,
-        bytes_per_frame: int = 512,
-        inter_frame_gap_ms: int = 10,
     ) -> None:
         self.port = port
         self.port.set_rx_callback(self._on_bytes)
@@ -57,8 +55,6 @@ class SerialSession:
         # 基线参数
         self.ack_timeout_ms = int(ack_timeout_ms)
         self.cmd_timeout_ms = int(cmd_timeout_ms)
-        self.bytes_per_frame = int(bytes_per_frame)
-        self.inter_frame_gap_ms = int(inter_frame_gap_ms)
 
         # 幂等控制：记录最近一次B1序号
         self._last_b1_seq: Optional[int] = None
@@ -89,8 +85,6 @@ class SerialSession:
 
         # 运行时可调参数（配置优先，覆盖构造形参值；默认由 ConfigRepo._apply_defaults() 保底）
         try:
-            self.bytes_per_frame = int(comm_cfg.get("bytes_per_frame", self.bytes_per_frame))
-            self.inter_frame_gap_ms = int(comm_cfg.get("inter_frame_gap_ms", self.inter_frame_gap_ms))
             self.cmd_timeout_ms = int(comm_cfg.get("cmd_timeout_ms", self.cmd_timeout_ms))
             # 非重试场景的通用 ACK 等待超时（当前未在 send_and_wait_ack 中使用）
             self._ack_timeout_ms = int(comm_cfg.get("ack_timeout_ms", 1000))
@@ -128,7 +122,7 @@ class SerialSession:
         self.on_a1_result: Optional[Callable[[bool], None]] = None
 
         # 发送工作线程：统一出站路径（AF/A0/A1 等），避免在串口接收回调线程内执行业务与阻塞等待ACK
-        # 高优先级队列用于 AF 等“即时应答”帧，普通队列用于 A1 分片与心跳等
+        # 高优先级队列用于 AF 等“即时应答”帧，普通队列用于 A1 下发与心跳等
         self._tx_queue_high: "Queue[Callable[[], None]]" = Queue()
         self._tx_queue: "Queue[Callable[[], None]]" = Queue()
         self._tx_stop = threading.Event()
@@ -439,27 +433,14 @@ class SerialSession:
 
     def _send_a1_payload(self, indices: List[int], attrs: Optional[List[int]] = None, colors: Optional[List[int]] = None) -> None:
         """
-        发送 A1（2B/项位域，多项合帧）：
+        发送 A1（2B/项位域，单帧下发）：
         - 每项 2 字节：bit15=闪烁；bit14..13=颜色(00红/01绿/10蓝/11预留)；bit12..0=ID(13位)
-        - 每帧按 bytes_per_frame 聚合多个项；attrs bit0→闪烁；colors 0/1/2 对应 R/G/B；分片时 attrs/colors 与 indices 对齐
+        - attrs bit0→闪烁；colors 0/1/2 对应 R/G/B；单次请求仅发送一个 A1 seq
         - 空清单：仍发送一帧 A1 并等待 BF（保持统一时序）
         """
-        per_item_bytes = 2
-        max_val_bytes = max(1, int(self.bytes_per_frame))
-        chunk_size = max(1, max_val_bytes // per_item_bytes)
-    
-        all_ok = True
-        # 空清单也发送一帧（用于清屏或维持时序）
-        if not indices:
-            seq = self.next_seq()
-            frame = build_a1(indices=[], seq=seq, attrs=None, colors=None)
-            ok = self.send_and_wait_ack(frame, timeout_ms=self.cmd_timeout_ms)
-            all_ok = all_ok and ok
-            if self.on_a1_result:
-                try:
-                    self.on_a1_result(all_ok)
-                except Exception as e:
-                    self.logger.debug(f"on_a1_result callback error: {e}")
+        seq = self.next_seq()
+        frame = build_a1(indices=indices, seq=seq, attrs=attrs, colors=colors)
+        all_ok = self.send_and_wait_ack(frame, timeout_ms=self.cmd_timeout_ms)
     
         def close(self, drain_tx: bool = False, close_port: bool = False) -> None:
             """关闭会话：停止心跳与 TX 工作者，可选清空队列并关闭底层串口。"""
@@ -488,25 +469,6 @@ class SerialSession:
             except Exception:
                 pass
             return
-    
-        i = 0
-        n = len(indices)
-        while i < n:
-            chunk = indices[i : i + chunk_size]
-            # 对齐 attrs/colors 片段
-            attr_chunk: Optional[List[int]] = None
-            color_chunk: Optional[List[int]] = None
-            if attrs is not None:
-                attr_chunk = attrs[i : i + len(chunk)]
-            if colors is not None:
-                color_chunk = colors[i : i + len(chunk)]
-            seq = self.next_seq()
-            frame = build_a1(indices=chunk, seq=seq, attrs=attr_chunk, colors=color_chunk)
-            ok = self.send_and_wait_ack(frame, timeout_ms=self.cmd_timeout_ms)
-            all_ok = all_ok and ok
-            i += len(chunk)
-            if i < n and self.inter_frame_gap_ms > 0:
-                time.sleep(self.inter_frame_gap_ms / 1000.0)
     
         if self.on_a1_result:
             try:
